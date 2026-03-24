@@ -2,58 +2,60 @@ import streamlit as st
 import pytesseract
 from pdf2image import convert_from_bytes
 import pandas as pd
-import numpy as np
 from io import BytesIO
 
-st.set_page_config(page_title="Hassas Tablo OCR", layout="wide")
-st.title("🎯 Nokta Atışı Tablo Okuyucu")
+st.set_page_config(page_title="Korkmaz Form Analiz v5", layout="wide")
+st.title("🔬 Form Yerleşim Analizörü")
+
+# Yan menüden hassasiyet ayarları
+st.sidebar.header("⚙️ Ayarlar (İnce Ayar)")
+row_threshold = st.sidebar.slider("Satır Birleştirme Hassasiyeti (Yüksekse daha çok satır birleşir)", 10, 50, 25)
+col_threshold = st.sidebar.slider("Sütun Genişliği (Düşükse daha çok sütun oluşur)", 50, 200, 120)
 
 uploaded_file = st.file_uploader("PDF Formunu Yükle", type=["pdf"])
 
 if uploaded_file:
-    if st.button("TABLO YAPISINI KORUYARAK OKU"):
-        with st.spinner('Tablo hücreleri hesaplanıyor...'):
+    if st.button("FORMU YENİDEN ANALİZ ET"):
+        with st.spinner('Piksel hesaplamaları yapılıyor...'):
             images = convert_from_bytes(uploaded_file.read())
-            full_df = pd.DataFrame()
+            all_pages_df = []
 
             for i, img in enumerate(images):
-                # Veriyi sözlük formatında al
                 d = pytesseract.image_to_data(img, lang='tur', output_type=pytesseract.Output.DICT)
                 df_page = pd.DataFrame(d)
                 
-                # Temizlik
-                df_page = df_page[df_page['conf'] > 20]
+                # Sadece güvenilir metinleri filtrele
+                df_page = df_page[df_page['conf'] > 15]
                 df_page = df_page[df_page['text'].str.strip() != ""]
                 
                 if not df_page.empty:
-                    # SATIR VE SÜTUN tespiti için koordinat yuvarlama
-                    # 'top' (yükseklik) değerini 25 piksele yuvarlayarak aynı satırı buluruz
-                    df_page['row_idx'] = (df_page['top'] // 25) * 25
-                    # 'left' (sol mesafe) değerini 100 piksele yuvarlayarak sütunları ayırırız
-                    df_page['col_idx'] = (df_page['left'] // 100) * 100
+                    # Dinamik gruplama
+                    df_page['row_group'] = (df_page['top'] // row_threshold) * row_threshold
+                    df_page['col_group'] = (df_page['left'] // col_threshold) * col_threshold
                     
-                    # Aynı hücreye düşen kelimeleri birleştir
-                    pivot_df = df_page.pivot_table(
-                        index='row_idx', 
-                        columns='col_idx', 
+                    # Pivot Table ile ızgara yapısı kur
+                    pivot = df_page.pivot_table(
+                        index='row_group', 
+                        columns='col_group', 
                         values='text', 
-                        aggfunc=lambda x: " ".join(x)
-                    ).reset_index(drop=True)
+                        aggfunc=lambda x: " ".join(list(x))
+                    ).sort_index()
                     
-                    full_df = pd.concat([full_df, pivot_df], ignore_index=True)
+                    all_pages_df.append(pivot)
 
-            if not full_df.empty:
-                st.success("Tablo hücresel olarak ayrıştırıldı!")
-                st.dataframe(full_df)
+            if all_pages_df:
+                final_df = pd.concat(all_pages_df, axis=0)
+                st.success("Analiz bitti! Aşağıdaki tabloyu kontrol et.")
+                st.dataframe(final_df)
 
-                # EXCEL ÇIKTISI
+                # Excel'e aktar
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    full_df.to_excel(writer, index=False)
+                    final_df.to_excel(writer, index=False)
                 
                 st.download_button(
-                    label="📥 DÜZENLİ EXCELİ İNDİR",
+                    label="📥 YENİ EXCEL'İ İNDİR",
                     data=output.getvalue(),
-                    file_name="Duzenli_Tablo.xlsx",
+                    file_name="Korkmaz_Form_Analiz.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
