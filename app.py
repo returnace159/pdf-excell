@@ -1,79 +1,45 @@
 import streamlit as st
-import pytesseract
-from pdf2image import convert_from_path
+import pdfplumber
 import pandas as pd
-import numpy as np
-from PIL import Image
-import tempfile
-import os
 from io import BytesIO
 
-# --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Proje OCR: PDF to Excel", layout="wide")
+st.set_page_config(page_title="Korkmaz OCR v2", layout="wide")
+st.title("📊 Akıllı Tablo Ayıklayıcı (Excel Formatlı)")
 
-def main():
-    st.title("📂 Profesyonel PDF - Excel Dönüştürücü (OCR)")
-    st.info("Demir Kural: Tablo yapısını korumaya odaklı tarama yapar.")
+uploaded_file = st.file_uploader("PDF Formunu Yükle", type=["pdf"])
 
-    # Dosya Yükleme
-    uploaded_file = st.file_uploader("Bakım Formu veya Tablolu PDF Yükle", type=["pdf"])
+if uploaded_file:
+    if st.button("TABLOYU YAKALA"):
+        with st.spinner('Tablo çizgileri analiz ediliyor...'):
+            all_tables = []
+            
+            with pdfplumber.open(uploaded_file) as pdf:
+                for page in pdf.pages:
+                    # extract_table metodu çizgileri takip eder, kayma yapmaz.
+                    table = page.extract_table()
+                    if table:
+                        df = pd.DataFrame(table[1:], columns=table[0])
+                        all_tables.append(df)
+            
+            if all_tables:
+                final_df = pd.concat(all_tables, ignore_index=True)
+                
+                # Sütun isimlerini temizle (Boşlukları kaldır)
+                final_df.columns = [str(c).replace('\n', ' ') for c in final_df.columns]
+                
+                st.success("Tablo Yapısı Korunarak Okundu!")
+                st.dataframe(final_df) # Ekranda tablo gibi gösterir
 
-    if uploaded_file:
-        # OCR Dili Seçimi
-        lang = st.selectbox("Okuma Dili Seçin:", ["tur", "eng"], index=0)
-        
-        if st.button("VERİLERİ AYIKLA VE EXCEL'E DÖNÜŞTÜR"):
-            with st.spinner('Görsel işleniyor, bu işlem PDF sayfa sayısına göre vakit alabilir...'):
-                try:
-                    # PDF'i geçici dosyaya yaz
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                        tmp.write(uploaded_file.read())
-                        tmp_path = tmp.name
-
-                    # PDF -> Resim Dönüşümü
-                    images = convert_from_path(tmp_path)
-                    final_data = []
-
-                    for i, img in enumerate(images):
-                        # Tesseract ile veriyi 'data' formatında al (koordinatlı okuma için)
-                        # Bu yöntem düz string okumadan daha isabetli sonuç verir
-                        data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
-                        
-                        df_page = pd.DataFrame(data)
-                        # Sadece güvenilir (conf > 0) ve boş olmayan metinleri al
-                        df_page = df_page[df_page['conf'] > 0]
-                        df_page = df_page[df_page['text'].str.strip() != ""]
-                        
-                        # Satırları (top değerine göre) gruplayarak tablo yapısını taklit et
-                        # Aynı hizadaki metinleri aynı satıra toplar
-                        df_page['line'] = df_page['top'].apply(lambda x: x // 10) # 10 piksellik tolerans
-                        lines = df_page.groupby('line')['text'].apply(lambda x: " ".join(x)).reset_index()
-                        
-                        for _, row in lines.iterrows():
-                            final_data.append({"Sayfa": i+1, "İçerik": row['text']})
-
-                    # Sonuç Tablosu
-                    result_df = pd.DataFrame(final_data)
-                    st.success("İşlem Tamamlandı!")
-                    st.dataframe(result_df, use_container_width=True)
-
-                    # Excel İndirme İşlemi
-                    output = BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        result_df.to_excel(writer, index=False, sheet_name='OCR_Sonuc')
-                    
-                    st.download_button(
-                        label="📥 EXCEL OLARAK İNDİR",
-                        data=output.getvalue(),
-                        file_name="OCR_Analiz_Raporu.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-                    # Temizlik
-                    os.remove(tmp_path)
-
-                except Exception as e:
-                    st.error(f"Bir hata oluştu: {e}")
-
-if __name__ == "__main__":
-    main()
+                # EXCEL OLUŞTURMA
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    final_df.to_excel(writer, index=False, sheet_name='Bakim_Formu')
+                
+                st.download_button(
+                    label="📥 BURAYA TIKLA VE EXCELİ İNDİR",
+                    data=output.getvalue(),
+                    file_name="Bakim_Formu_Duzenli.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.error("PDF içinde belirgin bir tablo çizgisi bulunamadı.")
