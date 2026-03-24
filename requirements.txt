@@ -1,6 +1,4 @@
 streamlit
-pytesseract
-pdf2image
+pdfplumber
 pandas
 openpyxl
-pillow
