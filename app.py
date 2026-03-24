@@ -2,58 +2,78 @@ import streamlit as st
 import pytesseract
 from pdf2image import convert_from_path
 import pandas as pd
+import numpy as np
 from PIL import Image
 import tempfile
 import os
+from io import BytesIO
 
-st.set_page_config(page_title="PDF'ten Excel'e OCR", layout="wide")
-st.title("📄 PDF to Excel OCR Converter")
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="Proje OCR: PDF to Excel", layout="wide")
 
-uploaded_file = st.file_uploader("Bir PDF dosyası yükleyin", type=["pdf"])
+def main():
+    st.title("📂 Profesyonel PDF - Excel Dönüştürücü (OCR)")
+    st.info("Demir Kural: Tablo yapısını korumaya odaklı tarama yapar.")
 
-if uploaded_file is not None:
-    with st.spinner('PDF işleniyor ve metinler okunuyor...'):
-        # PDF'i geçici bir dosyaya kaydet
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            tmp_path = tmp_file.name
+    # Dosya Yükleme
+    uploaded_file = st.file_uploader("Bakım Formu veya Tablolu PDF Yükle", type=["pdf"])
 
-        # PDF sayfalarını resme dönüştür
-        images = convert_from_path(tmp_path)
+    if uploaded_file:
+        # OCR Dili Seçimi
+        lang = st.selectbox("Okuma Dili Seçin:", ["tur", "eng"], index=0)
         
-        all_text_data = []
-        
-        for i, image in enumerate(images):
-            # Tesseract ile Türkçe metin okuma
-            text = pytesseract.image_to_string(image, lang='tur')
-            lines = text.split('\n')
-            for line in lines:
-                if line.strip(): # Boş olmayan satırları al
-                    all_text_data.append([f"Sayfa {i+1}", line.strip()])
+        if st.button("VERİLERİ AYIKLA VE EXCEL'E DÖNÜŞTÜR"):
+            with st.spinner('Görsel işleniyor, bu işlem PDF sayfa sayısına göre vakit alabilir...'):
+                try:
+                    # PDF'i geçici dosyaya yaz
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(uploaded_file.read())
+                        tmp_path = tmp.name
 
-        # Verileri DataFrame'e dök
-        df = pd.DataFrame(all_text_data, columns=["Sayfa", "Metin İçeriği"])
-        
-        st.success("Metinler başarıyla ayrıştırıldı!")
-        st.dataframe(df)
+                    # PDF -> Resim Dönüşümü
+                    images = convert_from_path(tmp_path)
+                    final_data = []
 
-        # Excel'e dönüştür ve indirme butonu koy
-        @st.cache_data
-        def convert_df(df):
-            return df.to_excel(index=False).encode('utf-8')
+                    for i, img in enumerate(images):
+                        # Tesseract ile veriyi 'data' formatında al (koordinatlı okuma için)
+                        # Bu yöntem düz string okumadan daha isabetli sonuç verir
+                        data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
+                        
+                        df_page = pd.DataFrame(data)
+                        # Sadece güvenilir (conf > 0) ve boş olmayan metinleri al
+                        df_page = df_page[df_page['conf'] > 0]
+                        df_page = df_page[df_page['text'].str.strip() != ""]
+                        
+                        # Satırları (top değerine göre) gruplayarak tablo yapısını taklit et
+                        # Aynı hizadaki metinleri aynı satıra toplar
+                        df_page['line'] = df_page['top'].apply(lambda x: x // 10) # 10 piksellik tolerans
+                        lines = df_page.groupby('line')['text'].apply(lambda x: " ".join(x)).reset_index()
+                        
+                        for _, row in lines.iterrows():
+                            final_data.append({"Sayfa": i+1, "İçerik": row['text']})
 
-        # Excel dosyası hazırlama (pandas to_excel kullanımı)
-        from io import BytesIO
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Sheet1')
-        
-        st.download_button(
-            label="📥 Excel Olarak İndir",
-            data=output.getvalue(),
-            file_name="ocr_sonuc.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        
-        # Temizlik
-        os.remove(tmp_path)
+                    # Sonuç Tablosu
+                    result_df = pd.DataFrame(final_data)
+                    st.success("İşlem Tamamlandı!")
+                    st.dataframe(result_df, use_container_width=True)
+
+                    # Excel İndirme İşlemi
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        result_df.to_excel(writer, index=False, sheet_name='OCR_Sonuc')
+                    
+                    st.download_button(
+                        label="📥 EXCEL OLARAK İNDİR",
+                        data=output.getvalue(),
+                        file_name="OCR_Analiz_Raporu.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+                    # Temizlik
+                    os.remove(tmp_path)
+
+                except Exception as e:
+                    st.error(f"Bir hata oluştu: {e}")
+
+if __name__ == "__main__":
+    main()
